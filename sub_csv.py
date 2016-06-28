@@ -8,6 +8,15 @@ from functools import reduce
 
 import alph_to_num
 
+"""
+Usage::
+
+  > python sub_csv.py path/to/your/original/file.csv N=Jack
+  39 filter result saved to path/to/your/original/2016-06-28 10-30-41.csv
+
+  > python sub_csv.py path/to/your/original/file.csv N=Jack AA=72KG
+  2 filter result saved to path/to/your/original/2016-06-28 10-30-41.csv
+"""
 class SubCsv():
     __matrix = None
     __sub_matrixes = []

@@ -7,11 +7,14 @@ _alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
 _alphabet = {v: k + 1 for k, v in dict(enumerate(_alphabet)).items()}
 
 def __alphabet_to_number(s):
-    l = list(s)
+    l = list(s.upper())
     l.reverse()
     def _bit_value(t):
         return _alphabet[t[1]] * (len(_alphabet) ** t[0])
-    return reduce(lambda x, y: x + y, map(_bit_value, list(enumerate(l))))
+    try:
+        return reduce(lambda x, y: x + y, map(_bit_value, list(enumerate(l))))
+    except:
+        raise ValueError('{} is not convertable alphabet string.'.format(s))
 
 convert = __alphabet_to_number
 

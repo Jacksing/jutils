@@ -5,6 +5,7 @@ import datetime
 import codecs
 
 from functools import reduce
+from inspect import isfunction
 
 import alph_to_num
 
@@ -20,9 +21,11 @@ Usage::
 class SubCsv():
     __matrix = None
     __sub_matrixes = []
+    converters = {}
 
     def __init__(self, csv_file, skip_title=True):
         self.csv_file = csv_file
+        self.convert_mapping = {}
 
     # Create the matrix object from the csv file.
     # If the matrix is already created it will be return directly.
@@ -66,6 +69,40 @@ class SubCsv():
         self.__sub_matrixes.append(list(filter(filter_fun, matrix)))
         return self.__sub_matrixes[-1]
 
+    @staticmethod
+    def register_converter(name, converter):
+        if isfunction(converter):
+            SubCsv.converters.update({name: converter})
+        elif type(converter) in [str, unicode]:
+            try:
+                SubCsv.converters.update({name: eval('lambda %s' % converter)})
+            except Exception:
+                raise SyntaxError('{} is not valid converter function content.'.format(converter))
+    
+    def convert(self, col, converter):
+        if type(col) in [int, long]:
+            col_num = col
+        elif type(col) == [str, unicode]:
+            try:
+                col_num = alph_to_num.convert(col)
+            except ValueError as ex:
+                raise ex
+        else:
+            raise TypeError('{} is not a valid column marking.'.format(col))
+        
+        if isfunction(converter):
+            self.convert_mapping.update({col_num: converter})
+        elif type(converter) in [str, unicode]:
+            if converter not in SubCsv.converters:
+                SubCsv.register_converter(converter, converter)
+            self.convert_mapping.update({col_num: SubCsv.converters[converter]})
+        else:
+            raise TypeError('{} is not a valid converter type.'.format(type(converter)))
+
+    def __convert_row(self, row):
+        for k, v in self.convert_mapping.items():
+            row[k] = v(row[k])
+
     def __write(self, matrix, csv_file=None):
         if len(matrix) == 0:
             return 0, "The csv matrix is empty."
@@ -80,6 +117,10 @@ class SubCsv():
 
         f = open(sub_csv_file, 'w', encoding='utf-8_sig', newline='')
         cw = csv.writer(f)
+
+        if self.convert_mapping:
+            matrix = [self.__convert_row(row) for row in matrix]
+
         cw.writerows(matrix)
         f.close()
 

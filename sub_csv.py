@@ -12,7 +12,7 @@ from six import string_types, integer_types
 
 import alph_to_num
 
-DEBUG = True
+DEBUG = False
 
 default_encoding = 'utf-8_sig'
 safe_list = ['random', 'abs', 'int', 'ss']
@@ -163,9 +163,10 @@ class SubCsv():
             SubCsv.converter_repo.update({name: converter})
         elif isinstance(converter, string_types):
             try:
+                print('begin eval: `{}`.'.format('lambda %s' % converter))
                 SubCsv.converter_repo.update({name: safe_eval('lambda %s' % converter)})
             except Exception as ex:
-                raise SyntaxError('{} is not valid converter function content.'.format(converter))
+                raise SyntaxError('`{}` is not valid converter function content.'.format(converter))
 
     def convert(self, col, converter):
         """
@@ -182,7 +183,7 @@ class SubCsv():
             except ValueError as ex:
                 raise ex
         else:
-            raise TypeError('{} is not a valid column marking.'.format(col))
+            raise TypeError('`{}` is not a valid column marking.'.format(col))
         
         # Directly use the converter function 
         #  or: find it in static repository
@@ -194,7 +195,15 @@ class SubCsv():
                 SubCsv._register_converter(converter, converter)
             self.convert_strategy.update({col_num: SubCsv.converter_repo[converter]})
         else:
-            raise TypeError('{} is not a valid converter marking.'.format(type(converter)))
+            raise TypeError('`{}` is not a valid converter marking.'.format(type(converter)))
+
+    def convert_all(self, mapping, **kwargs):
+        """Preset all convert strategy by calling `convert()`."""
+        if type(mapping) is dict:
+            kwargs.update(mapping)
+
+        for col, converter in kwargs.items():
+            self.convert(col, converter)
 
     def __convert_row(self, row):
         """Convert each cell value in single row into new value by preseted convert mappings."""
@@ -236,6 +245,9 @@ class SubCsv():
 #----------------------------------------------------------------------
 import unittest
 
+def prefix(cell):
+    return 'pre_{}'.format(cell)
+
 class TestSubCsv(unittest.TestCase):
     def test_sub_and_convert(self):
         pass
@@ -244,7 +256,12 @@ class TestSubCsv(unittest.TestCase):
         pass
 
     def test_convert_only(self):
-        pass
+        SubCsv._register_converter('plus_one', 'x: random()')
+        SubCsv._register_converter('prefix', prefix)
+
+        sc.convert(1, 'plus_one')
+        sc.convert('p', 'prefix')
+        sc.convert('f', 'x: random()')
 
     def test_no_sub_or_convert(self):
         pass
@@ -257,26 +274,20 @@ if __name__ == '__main__':
     log(' '.join(sys.argv))
 
     try:
-        def prefix(cell):
-            return 'pre_{}'.format(cell)
-
+        file_path = sys.argv[1]
+        sc = SubCsv(file_path)
+        
         def split_sub_and_convert_command():
             all_cmd = sys.argv[2:]
             sub_cmd = [cmd for cmd in all_cmd if len(cmd.split('=')) ==2]
-            convert_cmd = [cmd for cmd in all_cmd if len(cmd.split(':')) == 2]
+            convert_cmd = dict([cmd.split('::') for cmd in all_cmd if len(cmd.split('::')) == 2])
             return sub_cmd, convert_cmd
+        sub, convert = split_sub_and_convert_command()
 
-        SubCsv._register_converter('plus_one', 'x: random()')
-        SubCsv._register_converter('prefix', prefix)
-
-        file_path = sys.argv[1]
-        sc = SubCsv(file_path)
-        sc.sub(sys.argv[2:])
-        sc.convert(1, 'plus_one')
-        sc.convert('p', 'prefix')
-        sc.convert('f', 'x: random()')
+        sc.sub(sub)
+        sc.convert_all(convert)
     except Exception as ex:
-        print(ex)
+        log(ex)
         sys.exit(ex)
 
     print('%d filter result saved. %s' % sc.write_all())

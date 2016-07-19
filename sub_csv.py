@@ -12,7 +12,7 @@ from six import string_types, integer_types
 
 import alph_to_num
 
-DEBUG = False
+DEBUG = True
 
 default_encoding = 'utf-8_sig'
 safe_list = ['random', 'abs', 'int', 'ss']

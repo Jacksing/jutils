@@ -5,49 +5,67 @@ import datetime
 import codecs
 
 from functools import reduce
-from inspect import isfunction
+import inspect
 from random import random
 
 from six import string_types, integer_types
 
 import alph_to_num
 
+DEBUG = True
+
 default_encoding = 'utf-8_sig'
-safe_list = ['random', 'abs', ]
+safe_list = ['random', 'abs', 'int', 'ss']
+
+def log(value):
+    if DEBUG:
+        print(value)
 
 def get_safe_object():
-    global_dict = globals()
-    builtins_module = global_dict.get('__builtins__')
+    all_builtin = {
+        name: obj for name, obj in inspect.getmembers(__builtins__)
+                  if inspect.isbuiltin(obj) or (inspect.isclass(obj) and not issubclass(obj, Exception))
+    }
+
+    all_global = {
+        name: obj for name, obj in globals().items()
+                  if inspect.isbuiltin(obj) or (inspect.isclass(obj) and not issubclass(obj, Exception))
+    }
 
     def _get_safe_object(name):
         try:
-            if global_dict.get(name, None):
-                return global_dict[name]
-            elif hasattr(builtins_module, name):
-                return getattr(builtins_module, name)
+            if name in all_global:
+                log('get `{}` from global.'.format(name))
+                return all_global[name]
+            elif name in all_builtin:
+                log('get `{}` from builtin.'.format(name))
+                return all_builtin[name]
             else:
+                log("can't find allowed object for `{}`.".format(name))
                 return None
         except Exception as ex:
-            print(ex)
+            log(ex)
             return None
 
     return dict([(k, _get_safe_object(k)) for k in safe_list])
 
+safe_objects = get_safe_object()
+
 def safe_eval(expression):
-    f = eval(expression)
-    # return f
-    return eval(expression, {'__builtins__': {}}, get_safe_object())
+    no_builtin_dict = {'__builtins__': {}}
+    no_builtin_dict.update(safe_objects)
+    return eval(expression, no_builtin_dict)
 
-"""
-Usage::
-
-  > python sub_csv.py path/to/your/original/file.csv N=Jack
-  39 filter result saved. path/to/your/original/2016-06-28 10-30-41.csv
-
-  > python sub_csv.py path/to/your/original/file.csv N=Jack AA=72KG
-  2 filter result saved. path/to/your/original/2016-06-28 10-30-41.csv
-"""
 class SubCsv():
+    """
+    Usage::
+
+    > python sub_csv.py path/to/your/original/file.csv N=Jack
+    39 filter result saved. path/to/your/original/2016-06-28 10-30-41.csv
+
+    > python sub_csv.py path/to/your/original/file.csv N=Jack AA=72KG
+    2 filter result saved. path/to/your/original/2016-06-28 10-30-41.csv
+    """
     encoding = default_encoding
     converter_repo = {}
 
@@ -141,7 +159,7 @@ class SubCsv():
             Config the global setting `safe_list` to allow objects that can be used
             in generating functions.
         """
-        if isfunction(converter):
+        if inspect.isfunction(converter):
             SubCsv.converter_repo.update({name: converter})
         elif isinstance(converter, string_types):
             try:
@@ -169,7 +187,7 @@ class SubCsv():
         # Directly use the converter function 
         #  or: find it in static repository
         #  or: generate and save it.
-        if isfunction(converter):
+        if inspect.isfunction(converter):
             self.convert_strategy.update({col_num: converter})
         elif isinstance(converter, string_types):
             if converter not in SubCsv.converter_repo:
@@ -181,6 +199,7 @@ class SubCsv():
     def __convert_row(self, row):
         """Convert each cell value in single row into new value by preseted convert mappings."""
         for k, v in self.convert_strategy.items():
+            log('{col} is {val}'.format(col=k, val=row[k]))
             row[k] = v(row[k])
         return row
 
@@ -212,18 +231,42 @@ class SubCsv():
         """Combine all sub matrixes in the stack and write back to the specific file."""
         return self.__write(reduce(lambda x, y: x + y, self._sub_matrices), csv_file)
 
+#----------------------------------------------------------------------
+# Basic tests.
+#----------------------------------------------------------------------
+import unittest
+
+class TestSubCsv(unittest.TestCase):
+    def test_sub_and_convert(self):
+        pass
+
+    def test_sub_only(self):
+        pass
+
+    def test_convert_only(self):
+        pass
+
+    def test_no_sub_or_convert(self):
+        pass
+
 
 if __name__ == '__main__':
     if len(sys.argv) < 3:
         sys.exit('Not enough parameters to continue.')
 
-    print(' '.join(sys.argv))
+    log(' '.join(sys.argv))
 
     try:
         def prefix(cell):
             return 'pre_{}'.format(cell)
 
-        SubCsv._register_converter('plus_one', 'x: int(x) + 1')
+        def split_sub_and_convert_command():
+            all_cmd = sys.argv[2:]
+            sub_cmd = [cmd for cmd in all_cmd if len(cmd.split('=')) ==2]
+            convert_cmd = [cmd for cmd in all_cmd if len(cmd.split(':')) == 2]
+            return sub_cmd, convert_cmd
+
+        SubCsv._register_converter('plus_one', 'x: random()')
         SubCsv._register_converter('prefix', prefix)
 
         file_path = sys.argv[1]

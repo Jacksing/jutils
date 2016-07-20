@@ -12,14 +12,19 @@ from six import string_types, integer_types
 
 import alph_to_num
 
-DEBUG = True
+DEBUG = False
 
 default_encoding = 'utf-8_sig'
 safe_list = ['random', 'abs', 'int', 'ss']
 
-def log(value):
+filter_operator = '='
+convert_operator = '::'
+
+
+def debug_info(value):
     if DEBUG:
         print(value)
+
 
 def get_safe_object():
     all_builtin = {
@@ -35,29 +40,70 @@ def get_safe_object():
     def _get_safe_object(name):
         try:
             if name in all_global:
-                log('get `{}` from global.'.format(name))
+                debug_info('get `{}` from global.'.format(name))
                 return all_global[name]
             elif name in all_builtin:
-                log('get `{}` from builtin.'.format(name))
+                debug_info('get `{}` from builtin.'.format(name))
                 return all_builtin[name]
             else:
-                log("can't find allowed object for `{}`.".format(name))
+                debug_info("can't find allowed object for `{}`.".format(name))
                 return None
         except Exception as ex:
-            log(ex)
+            debug_info(ex)
             return None
 
     return dict([(k, _get_safe_object(k)) for k in safe_list])
 
 safe_objects = get_safe_object()
 
+
 def safe_eval(expression):
+    """Eval an expression safely under specified restriction."""
     no_builtin_dict = {'__builtins__': {}}
     no_builtin_dict.update(safe_objects)
     return eval(expression, no_builtin_dict)
 
+
+# TODO: add features to support more patterns.
+def get_lambda_string(lambda_content):
+    """
+    Reformat lambda_content to allow user to create lambda more flexibly.
+
+    Allowed patterns of lambda_content:
+        1) s: s + 'KG'      -->	    lambda s: s + 'KG'
+
+           s is treated as string. 
+
+        2) d: d + 100       -->     lambda d: ast.literal(d) + 100
+
+           d is treated as a digit.
+        
+        2) random()         -->     lambda s: random()
+
+           no parameter specified, add a default one.
+        
+        3) 'Shanghai'       -->     lambda s: 'Shanghai'
+
+           no parameter and return a string value directly.
+    """
+    if lambda_content.startswith('s:'):
+        return 'lambda {}'.format(lambda_content)
+
+    if lambda_content.startswith('d:'):
+        # TODO: add support for digit.
+        return 'lambda {}'.format(lambda_content)
+
+    splited = lambda_content.split(':')
+    if len(splited) > 1 and ' ' not in splited[0].strip():
+        return 'lambda {}'.format(lambda_content)
+
+    return 'lambda x: {}'.format(lambda_content)
+
+
 class SubCsv():
     """
+    Create sub csv by filter or convert the content of original csv file.
+
     Usage::
 
     > python sub_csv.py path/to/your/original/file.csv N=Jack
@@ -65,17 +111,36 @@ class SubCsv():
 
     > python sub_csv.py path/to/your/original/file.csv N=Jack AA=72KG
     2 filter result saved. path/to/your/original/2016-06-28 10-30-41.csv
+
+    # content of column A will be set to '76KG'
+    > python sub_csv.py path/to/your/original/file.csv N=Jack AA=72KG A::x:'76KG'
+    2 filter result saved. path/to/your/original/2016-06-28 10-30-41.csv
     """
     encoding = default_encoding
     converter_repo = {}
 
-    def __init__(self, csv_file, skip_title=True, encoding=None):
-        self._matrix = None
-        self._sub_matrices = []
-        
+    def __init__(self, csv_file, ensure_header=True, encoding=None):
+        """
+        Constructor for SubCsv, with sensible defaults.
+
+        csv_file is file path of the original csv file.
+
+        If ensure_header is true, first line of csv content will be treated as
+        the header columns, it will be stacked and exported to sub csv file.
+        """
+        self.csv_file = csv_file
+        self.ensure_header = ensure_header
         if encoding:
             self.encoding = encoding
-        self.csv_file = csv_file
+
+        self._header = None
+        self._matrix = None
+        # If `_sub_matrices` is None, whole original matrix will be exported to sub
+        # csv file.
+        # It will be initialized to an empty list in method `self.sub()`, and then
+        # the filter result matrix will be exported to sub csv file.
+        self._sub_matrices = None
+
         self.convert_strategy = {}  # in the format of {col_index: convert_function}
 
     def get_matrix(self):
@@ -88,6 +153,10 @@ class SubCsv():
             try:
                 with open(self.csv_file, 'r', encoding=self.encoding) as f:
                     self._matrix = [line for line in csv.reader(f)]
+
+                if self.ensure_header:
+                    self._header = self._matrix and self._matrix[0] or []
+                    self._matrix = self._matrix[1:]
             except Exception as ex:
                 raise ex
         return self._matrix
@@ -125,9 +194,12 @@ class SubCsv():
             >> sc.sub(['S=Female', ])
             >> sc.write_all('path/to/output/file.csv')
         """
+        if not filter_arr:
+            return None
+
         matrix = self.get_matrix()
         def combine_param(s):
-            k, v = s.split('=')
+            k, v = s.split(filter_operator)
 
             # Convert alphabet to column number.
             if not k.isdigit():
@@ -139,18 +211,23 @@ class SubCsv():
 
         # Generate the filter lambda function.
         filter_str = ' and '.join(list(map(combine_param, filter_arr)))
-        filter_fun = safe_eval('lambda x: %s' % filter_str)
+        expression = 'lambda x: %s' % filter_str
+        debug_info('begin eval: `{}`.'.format(expression))
+        filter_fun = safe_eval(expression)
+
+        if self._sub_matrices is None:
+            self._sub_matrices = []
 
         self._sub_matrices.append(list(filter(filter_fun, matrix)))
         return self._sub_matrices[-1]
 
     @staticmethod
-    def _register_converter(name, converter):
+    def register_converter(name, converter):
         """
         Generate a convert function and use `name` as the key to represent it.
 
         Parameter `converter` can be a function or a string type content.
-        If a string type is given, it will be used as the parameter by calling
+        If a string type is given, it will be used as the parameter to excute
         `safe_eval()` to generate a convert function.
 
         Attention:
@@ -163,8 +240,9 @@ class SubCsv():
             SubCsv.converter_repo.update({name: converter})
         elif isinstance(converter, string_types):
             try:
-                print('begin eval: `{}`.'.format('lambda %s' % converter))
-                SubCsv.converter_repo.update({name: safe_eval('lambda %s' % converter)})
+                expression = get_lambda_string(converter)
+                debug_info('begin eval: `{}`.'.format(expression))
+                SubCsv.converter_repo.update({name: safe_eval(expression)})
             except Exception as ex:
                 raise SyntaxError('`{}` is not valid converter function content.'.format(converter))
 
@@ -192,27 +270,27 @@ class SubCsv():
             self.convert_strategy.update({col_num: converter})
         elif isinstance(converter, string_types):
             if converter not in SubCsv.converter_repo:
-                SubCsv._register_converter(converter, converter)
+                SubCsv.register_converter(converter, converter)
             self.convert_strategy.update({col_num: SubCsv.converter_repo[converter]})
         else:
             raise TypeError('`{}` is not a valid converter marking.'.format(type(converter)))
 
     def convert_all(self, mapping, **kwargs):
-        """Preset all convert strategy by calling `convert()`."""
+        """Preset all convert strategy through calling `self.convert()`."""
         if type(mapping) is dict:
             kwargs.update(mapping)
 
         for col, converter in kwargs.items():
             self.convert(col, converter)
 
-    def __convert_row(self, row):
+    def __apply_strategy_for_row(self, row):
         """Convert each cell value in single row into new value by preseted convert mappings."""
         for k, v in self.convert_strategy.items():
-            log('{col} is {val}'.format(col=k, val=row[k]))
+            debug_info('{col} is {val}'.format(col=k, val=row[k]))
             row[k] = v(row[k])
         return row
 
-    def __write(self, matrix, csv_file=None):
+    def __write(self, matrix, csv_file=None, ensure_header=True):
         if len(matrix) == 0:
             return 0, "The csv matrix is empty."
 
@@ -225,20 +303,63 @@ class SubCsv():
             csv_file = csv_file
 
         if self.convert_strategy:
-            matrix = [self.__convert_row(row) for row in matrix]
+            matrix = [self.__apply_strategy_for_row(row) for row in matrix]
 
         try:
             with open(csv_file, 'w', encoding=self.encoding, newline='') as f:
                 cw = csv.writer(f)
+                if ensure_header and self._header:
+                    cw.writerow(self._header)
                 cw.writerows(matrix)
         except Exception as ex:
             return 0, ex
 
         return len(matrix), csv_file
 
-    def write_all(self, csv_file=None):
+    def write_all(self, csv_file=None, ensure_header=True):
         """Combine all sub matrixes in the stack and write back to the specific file."""
-        return self.__write(reduce(lambda x, y: x + y, self._sub_matrices), csv_file)
+        if self._sub_matrices is None:
+            sub_matrix = self.get_matrix()
+        else:
+            sub_matrix = reduce(lambda x, y: x + y, self._sub_matrices)
+        return self.__write(sub_matrix, csv_file, ensure_header)
+
+
+def execute_command():
+    if len(sys.argv) < 3:
+        sys.exit('Not enough parameters to continue.')
+
+    debug_info(' '.join(sys.argv))
+
+    try:
+        file_path = sys.argv[1]
+        all_action_cmd = sys.argv[2:]
+        
+        # DEBUG = '--debug' in all_action_cmd
+
+        def split_sub_and_convert_command():
+            # get all sub action commands into a list
+            sub_cmd = [cmd for cmd in all_action_cmd if len(cmd.split(filter_operator)) ==2]
+            # get all convert action commands into a dict
+            fn = lambda x: x.split(convert_operator)
+            convert_cmd = dict([fn(cmd) for cmd in all_action_cmd if len(fn(cmd)) == 2])
+
+            return sub_cmd, convert_cmd
+        
+        sub, convert = split_sub_and_convert_command()
+
+        ensure_header = '--ensure-header' in all_action_cmd
+
+        sc = SubCsv(file_path, ensure_header=ensure_header)
+        sc.sub(sub)
+        sc.convert_all(convert)
+        result = sc.write_all(ensure_header=ensure_header)
+    except Exception as ex:
+        debug_info(ex)
+        sys.exit(ex)
+
+    print('%d filter result saved. %s' % result)
+
 
 #----------------------------------------------------------------------
 # Basic tests.
@@ -256,8 +377,8 @@ class TestSubCsv(unittest.TestCase):
         pass
 
     def test_convert_only(self):
-        SubCsv._register_converter('plus_one', 'x: random()')
-        SubCsv._register_converter('prefix', prefix)
+        SubCsv.register_converter('plus_one', 'x: random()')
+        SubCsv.register_converter('prefix', prefix)
 
         sc.convert(1, 'plus_one')
         sc.convert('p', 'prefix')
@@ -268,26 +389,5 @@ class TestSubCsv(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) < 3:
-        sys.exit('Not enough parameters to continue.')
-
-    log(' '.join(sys.argv))
-
-    try:
-        file_path = sys.argv[1]
-        sc = SubCsv(file_path)
-        
-        def split_sub_and_convert_command():
-            all_cmd = sys.argv[2:]
-            sub_cmd = [cmd for cmd in all_cmd if len(cmd.split('=')) ==2]
-            convert_cmd = dict([cmd.split('::') for cmd in all_cmd if len(cmd.split('::')) == 2])
-            return sub_cmd, convert_cmd
-        sub, convert = split_sub_and_convert_command()
-
-        sc.sub(sub)
-        sc.convert_all(convert)
-    except Exception as ex:
-        log(ex)
-        sys.exit(ex)
-
-    print('%d filter result saved. %s' % sc.write_all())
+    execute_command()
+    # unittest.main()
